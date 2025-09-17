@@ -157,21 +157,31 @@ bot.on("message", async (msg) => {
   global.dialogs[chatId].push({ role: "user", content: userText });
 
   try {
-    const reply = await askGPT(global.dialogs[chatId]);
-    global.dialogs[chatId].push({ role: "assistant", content: reply });
+  const reply = await askGPT(global.dialogs[chatId]);
+  global.dialogs[chatId].push({ role: "assistant", content: reply });
 
-    if (/\[voice\]/i.test(reply)) {
-  // если GPT вставил [voice] → отправляем только голос
-  try { await speakToOgg(chatId, reply, bot); }
-  catch (e) { console.warn("⚠️ TTS error:", e.message); }
-} else {
-  // если [voice] нет → обычный текст
-  if (reply.trim()) await bot.sendMessage(chatId, reply.trim());
-}
-  } catch (e) {
-    console.error("❌ TG error:", e.message);
-    await bot.sendMessage(chatId, "Произошла ошибка. Попробуй ещё раз.");
+  if (/\[openLeadForm\]/i.test(reply)) {
+    // убираем тег и показываем кнопку "Поделиться контактом"
+    const msgText = reply.replace(/\[openLeadForm\]/gi, "").trim();
+    await bot.sendMessage(chatId, msgText || "Оставь заявку прямо здесь:", {
+      reply_markup: {
+        keyboard: [[{ text: "📱 Поделиться контактом", request_contact: true }]],
+        one_time_keyboard: true,
+        resize_keyboard: true
+      }
+    });
+  } else if (/\[voice\]/i.test(reply)) {
+    // если GPT вставил [voice] → только голос
+    try { await speakToOgg(chatId, reply, bot); }
+    catch (e) { console.warn("⚠️ TTS error:", e.message); }
+  } else {
+    // обычный текст
+    if (reply.trim()) await bot.sendMessage(chatId, reply.trim());
   }
+} catch (e) {
+  console.error("❌ TG error:", e.message);
+  await bot.sendMessage(chatId, "Произошла ошибка. Попробуй ещё раз.");
+}
 });
 
 // полезно видеть 409 (конфликт polling из двух инстансов)

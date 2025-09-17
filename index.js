@@ -160,15 +160,14 @@ bot.on("message", async (msg) => {
     const reply = await askGPT(global.dialogs[chatId]);
     global.dialogs[chatId].push({ role: "assistant", content: reply });
 
-    // если есть текст — отправляем
-    const plain = reply.replace(/\[voice\]/gi, "").trim();
-    if (plain) await bot.sendMessage(chatId, plain);
-
-    // если запросили голос
     if (/\[voice\]/i.test(reply)) {
-      try { await speakToOgg(chatId, reply, bot); }
-      catch (e) { console.warn("⚠️ TTS error:", e.message); }
-    }
+  // если GPT вставил [voice] → отправляем только голос
+  try { await speakToOgg(chatId, reply, bot); }
+  catch (e) { console.warn("⚠️ TTS error:", e.message); }
+} else {
+  // если [voice] нет → обычный текст
+  if (reply.trim()) await bot.sendMessage(chatId, reply.trim());
+}
   } catch (e) {
     console.error("❌ TG error:", e.message);
     await bot.sendMessage(chatId, "Произошла ошибка. Попробуй ещё раз.");

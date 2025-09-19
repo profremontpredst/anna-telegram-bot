@@ -60,6 +60,30 @@ async function transcribeVoice(fileId, bot) {
   }
 }
 
+// === Обновление промта ===
+if (!global.userPrompts) global.userPrompts = {};
+
+const SYSTEM_PROMPT_BASE = `
+Ты — "Анна", менеджер по продажам и консультант наших продуктов. Общение в Telegram.
+
+Стиль: коротко (1–4 предложения), по-человечески, без эмодзи.
+`;
+
+const SYSTEM_PROMPT_RULES = `
+Разрешены теги: [openLeadForm], [voice], [quiz], [showOptions].
+
+Правила голоса:
+- Первое приветствие всегда содержит [voice].
+- [voice] ставь, когда лучше сказать голосом: приветствие, короткие подтверждения, сочувствие, живое объяснение.
+- Для списков, цен и длинных инструкций используй текст без [voice].
+- Если [voice] есть, бот озвучивает текст сам.
+`;
+
+function buildSystemPrompt(chatId) {
+  const custom = global.userPrompts[chatId] || "";
+  return (custom || SYSTEM_PROMPT_BASE) + "\n\n" + SYSTEM_PROMPT_RULES;
+}
+
 // === GPT ===
 async function askGPT(history, chatId) {
   const messages = [{ role: "system", content: buildSystemPrompt(chatId) }, ...history];
@@ -117,13 +141,33 @@ async function speakToOgg(chatId, text, bot) {
 // === Telegram Bot (polling) ===
 const bot = new TelegramBot(TG_TOKEN, { polling: true });
 console.log("✅ Telegram бот Анна запущен (polling)");
-// === Главное меню ===
+
+// === Команды в меню ===
 bot.setMyCommands([
-  { command: "setprompt", description: "📝 Изменить промт" }
+  { command: "setprompt", description: "📝 Изменить промт" },
+  { command: "resetprompt", description: "🔄 Сбросить промт" }
 ]);
 
+// === Обработчик сообщений ===
+if (!global.dialogs) global.dialogs = {};
+
 bot.on("message", async (msg) => {
+  if (!msg?.chat?.id) return;
   const chatId = msg.chat.id;
+
+  // === ввод нового промта ===
+  if (global.userPrompts[chatId] === "__WAITING__") {
+    const newPrompt = msg.text?.trim();
+    if (newPrompt) {
+      global.userPrompts[chatId] = newPrompt;
+      await bot.sendMessage(chatId, "✅ Промт обновлён!");
+    } else {
+      global.userPrompts[chatId] = "";
+      await bot.sendMessage(chatId, "❌ Пустой текст. Попробуй ещё раз.");
+    }
+    return;
+  }
+
   let userText = msg.text?.trim() || "";
 
   // голосовые
@@ -136,7 +180,7 @@ bot.on("message", async (msg) => {
   }
   if (!userText) return;
 
-  // промокод просто как текст-ответ
+  // промокод
   if (/ANNA50/i.test(userText)) {
     await bot.sendMessage(chatId, "Промокод активирован: −50% на подключение, абонентка без изменений. Передала в отдел продаж.");
     return;
@@ -146,68 +190,35 @@ bot.on("message", async (msg) => {
   global.dialogs[chatId].push({ role: "user", content: userText });
 
   try {
-  const reply = await askGPT(global.dialogs[chatId], chatId);
-  global.dialogs[chatId].push({ role: "assistant", content: reply });
+    const reply = await askGPT(global.dialogs[chatId], chatId);
+    global.dialogs[chatId].push({ role: "assistant", content: reply });
 
-  if (/\[openLeadForm\]/i.test(reply)) {
-    // убираем тег и показываем кнопку "Поделиться контактом"
-    const msgText = reply.replace(/\[openLeadForm\]/gi, "").trim();
-    await bot.sendMessage(chatId, msgText || "Оставь заявку прямо здесь:", {
-      reply_markup: {
-        keyboard: [[{ text: "📱 Поделиться контактом", request_contact: true }]],
-        one_time_keyboard: true,
-        resize_keyboard: true
-      }
-    });
-  } else if (/\[voice\]/i.test(reply)) {
-    // если GPT вставил [voice] → только голос
-    try { await speakToOgg(chatId, reply, bot); }
-    catch (e) { console.warn("⚠️ TTS error:", e.message); }
-  } else {
-    // обычный текст
-    if (reply.trim()) await bot.sendMessage(chatId, reply.trim());
+    if (/\[openLeadForm\]/i.test(reply)) {
+      const msgText = reply.replace(/\[openLeadForm\]/gi, "").trim();
+      await bot.sendMessage(chatId, msgText || "Оставь заявку прямо здесь:", {
+        reply_markup: {
+          keyboard: [[{ text: "📱 Поделиться контактом", request_contact: true }]],
+          one_time_keyboard: true,
+          resize_keyboard: true
+        }
+      });
+    } else if (/\[voice\]/i.test(reply)) {
+      try { await speakToOgg(chatId, reply, bot); }
+      catch (e) { console.warn("⚠️ TTS error:", e.message); }
+    } else {
+      if (reply.trim()) await bot.sendMessage(chatId, reply.trim());
+    }
+  } catch (e) {
+    console.error("❌ TG error:", e.message);
+    await bot.sendMessage(chatId, "Произошла ошибка. Попробуй ещё раз.");
   }
-} catch (e) {
-  console.error("❌ TG error:", e.message);
-  await bot.sendMessage(chatId, "Произошла ошибка. Попробуй ещё раз.");
-}
 });
 
-// === Обновление промта ===
-if (!global.userPrompts) global.userPrompts = {};
-
-const SYSTEM_PROMPT_BASE = `
-Ты — "Анна", менеджер по продажам и консультант наших продуктов. Общение в Telegram.
-
-Стиль: коротко (1–4 предложения), по-человечески, без эмодзи.
-`;
-
-const SYSTEM_PROMPT_RULES = `
-Разрешены теги: [openLeadForm], [voice], [quiz], [showOptions].
-
-Правила голоса:
-- Первое приветствие всегда содержит [voice].
-- [voice] ставь, когда лучше сказать голосом: приветствие, короткие подтверждения, сочувствие, живое объяснение.
-- Для списков, цен и длинных инструкций используй текст без [voice].
-- Если [voice] есть, бот озвучивает текст сам.
-`;
-
-function buildSystemPrompt(chatId) {
-  const custom = global.userPrompts[chatId] || "";
-  return (custom || SYSTEM_PROMPT_BASE) + "\n\n" + SYSTEM_PROMPT_RULES;
-}
-
-// === Кнопки в меню ===
-bot.setMyCommands([
-  { command: "setprompt", description: "📝 Изменить промт" },
-  { command: "resetprompt", description: "🔄 Сбросить промт" }
-]);
-
-// === Установка нового промта ===
+// === Обработка команд ===
 bot.onText(/\/setprompt/, async (msg) => {
   const chatId = msg.chat.id;
-  await bot.sendMessage(chatId, "Введи новый текст для промта (часть про стиль/поведение):");
   global.userPrompts[chatId] = "__WAITING__";
+  await bot.sendMessage(chatId, "Введи новый текст для промта (часть про стиль/поведение):");
 });
 
 bot.onText(/\/resetprompt/, async (msg) => {
@@ -216,23 +227,7 @@ bot.onText(/\/resetprompt/, async (msg) => {
   await bot.sendMessage(chatId, "🔄 Промт сброшен до стандартного.");
 });
 
-// === Ловим ввод нового промта ===
-bot.on("message", (msg) => {
-  const chatId = msg.chat.id;
-  if (global.userPrompts[chatId] === "__WAITING__") {
-    const newPrompt = msg.text?.trim();
-    if (newPrompt) {
-      global.userPrompts[chatId] = newPrompt;
-      bot.sendMessage(chatId, "✅ Промт обновлён!");
-    } else {
-      bot.sendMessage(chatId, "❌ Пустой текст. Попробуй ещё раз.");
-      global.userPrompts[chatId] = "";
-    }
-    return; // чтобы не улетело в основной обработчик
-  }
-});
-
-// полезно видеть 409 (конфликт polling из двух инстансов)
+// === Лог ошибок ===
 bot.on("polling_error", (err) => {
   console.error("⚠️ polling_error:", err?.response?.body || err.message);
 });

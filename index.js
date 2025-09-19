@@ -32,21 +32,6 @@ const app = express();
 app.get("/", (_, res) => res.send("Anna TG bot is running"));
 app.listen(PORT, () => console.log("🌐 Keepalive on", PORT));
 
-const SYSTEM_PROMPT_TG = `
-Ты — "Анна", менеджер по продажам и консультант наших продуктов. Общение в Telegram.
-
-Стиль: коротко (1–4 предложения), по-человечески, без эмодзи. Разрешены теги: [openLeadForm], [voice], [quiz], [showOptions].
-
-Правила голоса:
-- Первое приветствие всегда содержит [voice].
-- [voice] ставь, когда лучше сказать голосом: приветствие, короткие подтверждения, сочувствие, живое объяснение.
-- Для списков, цен и длинных инструкций используй текст без [voice].
-- Если [voice] есть, бот озвучивает текст сам.
-`;
-
-// === память диалогов ===
-if (!global.dialogs) global.dialogs = {};
-
 // === STT (Whisper) ===
 async function transcribeVoice(fileId, bot) {
   try {
@@ -76,8 +61,8 @@ async function transcribeVoice(fileId, bot) {
 }
 
 // === GPT ===
-async function askGPT(history) {
-  const messages = [{ role: "system", content: SYSTEM_PROMPT_TG }, ...history];
+async function askGPT(history, chatId) {
+  const messages = [{ role: "system", content: buildSystemPrompt(chatId) }, ...history];
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -132,6 +117,10 @@ async function speakToOgg(chatId, text, bot) {
 // === Telegram Bot (polling) ===
 const bot = new TelegramBot(TG_TOKEN, { polling: true });
 console.log("✅ Telegram бот Анна запущен (polling)");
+// === Главное меню ===
+bot.setMyCommands([
+  { command: "setprompt", description: "📝 Изменить промт" }
+]);
 
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
@@ -157,7 +146,7 @@ bot.on("message", async (msg) => {
   global.dialogs[chatId].push({ role: "user", content: userText });
 
   try {
-  const reply = await askGPT(global.dialogs[chatId]);
+  const reply = await askGPT(global.dialogs[chatId], chatId);
   global.dialogs[chatId].push({ role: "assistant", content: reply });
 
   if (/\[openLeadForm\]/i.test(reply)) {
@@ -182,6 +171,65 @@ bot.on("message", async (msg) => {
   console.error("❌ TG error:", e.message);
   await bot.sendMessage(chatId, "Произошла ошибка. Попробуй ещё раз.");
 }
+});
+
+// === Обновление промта ===
+if (!global.userPrompts) global.userPrompts = {};
+
+const SYSTEM_PROMPT_BASE = `
+Ты — "Анна", менеджер по продажам и консультант наших продуктов. Общение в Telegram.
+
+Стиль: коротко (1–4 предложения), по-человечески, без эмодзи.
+`;
+
+const SYSTEM_PROMPT_RULES = `
+Разрешены теги: [openLeadForm], [voice], [quiz], [showOptions].
+
+Правила голоса:
+- Первое приветствие всегда содержит [voice].
+- [voice] ставь, когда лучше сказать голосом: приветствие, короткие подтверждения, сочувствие, живое объяснение.
+- Для списков, цен и длинных инструкций используй текст без [voice].
+- Если [voice] есть, бот озвучивает текст сам.
+`;
+
+function buildSystemPrompt(chatId) {
+  const custom = global.userPrompts[chatId] || "";
+  return (custom || SYSTEM_PROMPT_BASE) + "\n\n" + SYSTEM_PROMPT_RULES;
+}
+
+// === Кнопки в меню ===
+bot.setMyCommands([
+  { command: "setprompt", description: "📝 Изменить промт" },
+  { command: "resetprompt", description: "🔄 Сбросить промт" }
+]);
+
+// === Установка нового промта ===
+bot.onText(/\/setprompt/, async (msg) => {
+  const chatId = msg.chat.id;
+  await bot.sendMessage(chatId, "Введи новый текст для промта (часть про стиль/поведение):");
+  global.userPrompts[chatId] = "__WAITING__";
+});
+
+bot.onText(/\/resetprompt/, async (msg) => {
+  const chatId = msg.chat.id;
+  delete global.userPrompts[chatId];
+  await bot.sendMessage(chatId, "🔄 Промт сброшен до стандартного.");
+});
+
+// === Ловим ввод нового промта ===
+bot.on("message", (msg) => {
+  const chatId = msg.chat.id;
+  if (global.userPrompts[chatId] === "__WAITING__") {
+    const newPrompt = msg.text?.trim();
+    if (newPrompt) {
+      global.userPrompts[chatId] = newPrompt;
+      bot.sendMessage(chatId, "✅ Промт обновлён!");
+    } else {
+      bot.sendMessage(chatId, "❌ Пустой текст. Попробуй ещё раз.");
+      global.userPrompts[chatId] = "";
+    }
+    return; // чтобы не улетело в основной обработчик
+  }
 });
 
 // полезно видеть 409 (конфликт polling из двух инстансов)

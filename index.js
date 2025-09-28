@@ -80,8 +80,10 @@ const SYSTEM_PROMPT_RULES = `
 `;
 
 function buildSystemPrompt(chatId) {
-  const custom = global.userPrompts[chatId] || "";
-  return (custom || SYSTEM_PROMPT_BASE) + "\n\n" + SYSTEM_PROMPT_RULES;
+  const custom = global.userPrompts[chatId];
+  return SYSTEM_PROMPT_BASE
+       + (custom ? "\n\nДополнительные указания:\n" + custom : "")
+       + "\n\n" + SYSTEM_PROMPT_RULES;
 }
 
 // === GPT ===
@@ -106,16 +108,39 @@ async function askGPT(history, chatId) {
 
 // === TTS через твой ElevenLabs-прокси (/tg-voice -> mp3) ===
 async function speakToOgg(chatId, text, bot) {
-  const clean = text.replace(/\[voice\]/gi, "").trim();
+  // 1) Полная очистка тегов и HTML для TTS
+  const MAX_TTS_LEN = 500;
+  let clean = String(text)
+    .replace(/\[(openLeadForm|voice|quiz|showOptions)\]/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!clean) return;
+
+  // 2) Эмоциональная подача для ElevenLabs flash v2.5
+  let ttsText = clean.slice(0, MAX_TTS_LEN)
+    .replace(/([,.!?])\s+/g, "$1 ... ")                 // паузы после знаков
+    .replace(/\b(да|конечно|хорошо|отлично|здорово|супер)\b/gi, "$1!") // лёгкий акцент
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  // 3) Подбор эмоции
+  const low = ttsText.toLowerCase();
+  let emotion = "neutral";
+  if (/[!]{2,}|супер|отлично|здорово|классно|ура/.test(low)) emotion = "cheerful";
+  else if (/сожалею|извин|жаль|понимаю|сочувствую/.test(low)) emotion = "empathetic";
+  else if (/\?\s*$/.test(ttsText)) emotion = "curious";
+
+  // 4) Запрос к твоему ElevenLabs-прокси
   const tts = await fetch(`${ELEVEN_URL}/tg-voice`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: clean, emotion: "neutral" })
+    body: JSON.stringify({ text: ttsText, emotion })
   });
   if (!tts.ok) throw new Error(`TTS ${tts.status}`);
   const mp3 = Buffer.from(await tts.arrayBuffer());
 
+  // 5) Конвертация в OGG/Opus (Telegram)
   const tmpIn  = path.join("/tmp", `${Date.now()}.mp3`);
   const tmpOut = path.join("/tmp", `${Date.now()}.ogg`);
   fs.writeFileSync(tmpIn, mp3);
@@ -133,7 +158,11 @@ async function speakToOgg(chatId, text, bot) {
       .on("error", reject);
   });
 
-  await bot.sendVoice(chatId, fs.createReadStream(tmpOut), {}, { filename: "voice.ogg", contentType: "audio/ogg" });
+  await bot.sendVoice(chatId, fs.createReadStream(tmpOut), {}, {
+    filename: "voice.ogg",
+    contentType: "audio/ogg"
+  });
+
   fs.unlinkSync(tmpIn);
   fs.unlinkSync(tmpOut);
 }
@@ -189,24 +218,31 @@ bot.on("message", async (msg) => {
   if (!global.dialogs[chatId]) global.dialogs[chatId] = [];
   global.dialogs[chatId].push({ role: "user", content: userText });
 
-  try {
+    try {
     const reply = await askGPT(global.dialogs[chatId], chatId);
     global.dialogs[chatId].push({ role: "assistant", content: reply });
 
-    if (/\[openLeadForm\]/i.test(reply)) {
-      const msgText = reply.replace(/\[openLeadForm\]/gi, "").trim();
-      await bot.sendMessage(chatId, msgText || "Оставь заявку прямо здесь:", {
+    const hasForm  = /\[openLeadForm\]/i.test(reply);
+    const hasVoice = /\[voice\]/i.test(reply);
+
+    // Чистый текст для чата (без всех тегов)
+    const cleanForChat = reply
+      .replace(/\[(openLeadForm|voice|quiz|showOptions)\]/gi, "")
+      .trim();
+
+    if (hasForm) {
+      await bot.sendMessage(chatId, cleanForChat || "Оставь заявку прямо здесь:", {
         reply_markup: {
           keyboard: [[{ text: "📱 Поделиться контактом", request_contact: true }]],
           one_time_keyboard: true,
           resize_keyboard: true
         }
       });
-    } else if (/\[voice\]/i.test(reply)) {
+    } else if (hasVoice) {
       try { await speakToOgg(chatId, reply, bot); }
       catch (e) { console.warn("⚠️ TTS error:", e.message); }
     } else {
-      if (reply.trim()) await bot.sendMessage(chatId, reply.trim());
+      if (cleanForChat) await bot.sendMessage(chatId, cleanForChat);
     }
   } catch (e) {
     console.error("❌ TG error:", e.message);

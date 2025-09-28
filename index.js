@@ -184,17 +184,19 @@ bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
 
   // === ввод нового промта ===
-  if (global.userPrompts[chatId] === "__WAITING__") {
-    const newPrompt = msg.text?.trim();
-    if (newPrompt) {
-      global.userPrompts[chatId] = newPrompt;
-      await bot.sendMessage(chatId, "✅ Промт обновлён!");
-    } else {
-      global.userPrompts[chatId] = "";
-      await bot.sendMessage(chatId, "❌ Пустой текст. Попробуй ещё раз.");
-    }
-    return;
+if (global.userPrompts[chatId] === "__WAITING__") {
+  const newPrompt = msg.text?.trim();
+  if (newPrompt) {
+    global.userPrompts[chatId] = newPrompt;
+    // очищаем историю диалога, чтобы новый промт реально применился
+    if (global.dialogs) global.dialogs[chatId] = [];
+    await bot.sendMessage(chatId, "✅ Промт обновлён. Контекст сброшен.");
+  } else {
+    global.userPrompts[chatId] = "";
+    await bot.sendMessage(chatId, "❌ Пустой текст. Попробуй ещё раз.");
   }
+  return;
+}
 
   let userText = msg.text?.trim() || "";
 

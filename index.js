@@ -81,9 +81,8 @@ const SYSTEM_PROMPT_RULES = `
 
 function buildSystemPrompt(chatId) {
   const custom = global.userPrompts[chatId];
-  return SYSTEM_PROMPT_BASE
-       + (custom ? "\n\nДополнительные указания:\n" + custom : "")
-       + "\n\n" + SYSTEM_PROMPT_RULES;
+  const base = custom ? custom : SYSTEM_PROMPT_BASE;
+  return base + "\n\n" + SYSTEM_PROMPT_RULES;
 }
 
 // === GPT ===

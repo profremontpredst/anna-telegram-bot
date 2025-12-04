@@ -270,3 +270,10 @@ bot.on("polling_error", (err) => {
 });
 process.on("unhandledRejection", (e) => console.error("UNHANDLED:", e));
 process.on("uncaughtException", (e) => console.error("UNCAUGHT:", e));
+
+import express from "express";
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => res.send("Bot is running"));
+app.listen(PORT, () => console.log("Server keepalive on", PORT));
